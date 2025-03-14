@@ -68,7 +68,7 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
                 g_renderer->setMouseDragStart(static_cast<float>(xpos), static_cast<float>(ypos));
             } else if (action == GLFW_RELEASE) {
                 g_renderer->setMouseButtonState(false);
-                // No need to call storeDragOffset() as we're updating sphere position directly
+                g_renderer->storeDragOffset();
             }
         }
     }
@@ -163,7 +163,7 @@ int main() {
             int width, height;
             glfwGetWindowSize(window, &width, &height);
             
-            // Calculate horizontal angle - use negative for consistent control with shader
+            // Calculate horizontal angle (negative for correct direction after fixing shader)
             float horizontalAngle = -(float)(xpos / width) * 2.0f * 3.14159f;
             
             // Camera speed scaled by delta time for consistent movement

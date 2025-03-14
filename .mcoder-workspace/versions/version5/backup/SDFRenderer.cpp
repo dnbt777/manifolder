@@ -1,4 +1,3 @@
-#include <cmath>
 #include "SDFRenderer.h"
 #include "ShaderSources.h"
 #include <iostream>
@@ -6,7 +5,7 @@
 SDFRenderer::SDFRenderer() : VAO(0), VBO(0), EBO(0), width(800), height(600), mouseX(0.0f), mouseY(0.0f),
     mouseLeftPressed(false), dragStartX(0.0f), dragStartY(0.0f), currentDragX(0.0f), currentDragY(0.0f),
     savedDragX(0.0f), savedDragY(0.0f), cameraX(0.0f), cameraY(0.0f), cameraZ(2.0f),
-    draggingShape(false), selectedShape(0), sphereX(0.0f), sphereY(0.0f), sphereZ(0.0f) {
+    draggingShape(false), selectedShape(0) {
     // Initialize global camera position
     ::cameraX = 0.0f;
     ::cameraY = 0.0f;
@@ -61,40 +60,17 @@ void SDFRenderer::render(float time) {
     // Use shader
     shader.use();
     
-    // Calculate drag offset if mouse is pressed and update sphere position
+    // Calculate drag offset if mouse is pressed
     if (mouseLeftPressed) {
         currentDragX = mouseX - dragStartX;
         currentDragY = mouseY - dragStartY;
-        
-        // Convert mouse movement to world space movement
-        // This is simplified - in a real implementation we'd use ray casting from mouse to world
-        float horizontalAngle = -(mouseX / static_cast<float>(width)) * 2.0f * 3.14159f;
-        
-        // Get right and forward vectors based on camera orientation
-        float rightX = -cos(horizontalAngle);
-        float rightZ = sin(horizontalAngle);
-        float forwardX = sin(horizontalAngle);
-        float forwardZ = cos(horizontalAngle);
-        
-        // Scale factors to convert screen drag to world coordinates
-        float dragScale = 0.005f;
-        
-        // Update the sphere position based on drag direction and camera orientation
-        sphereX += (currentDragX * rightX - currentDragY * forwardX) * dragScale;
-        sphereY += currentDragY * dragScale; // Y stays relative to screen
-        sphereZ += (currentDragX * rightZ - currentDragY * forwardZ) * dragScale;
-        
-        // Reset the current drag for next frame
-        dragStartX = mouseX;
-        dragStartY = mouseY;
-        currentDragX = currentDragY = 0.0f;
     }
     
     // Set uniforms
     shader.setVec2("u_resolution", static_cast<float>(width), static_cast<float>(height));
     shader.setFloat("u_time", time);
     shader.setVec2("u_mouse", mouseX, mouseY);
-    shader.setVec3("u_spherePosition", sphereX, sphereY, sphereZ);
+    shader.setVec2("u_dragOffset", savedDragX + currentDragX, savedDragY + currentDragY);
     shader.setFloat("u_isDragging", mouseLeftPressed ? 1.0f : 0.0f);
     
     // Set camera position uniform
@@ -140,8 +116,9 @@ void SDFRenderer::setMouseDragStart(float x, float y) {
 }
 
 void SDFRenderer::storeDragOffset() {
-    // With the new implementation, we don't need to store drag offset separately
-    // as the sphere's position is directly updated during dragging
+    // Save current drag as permanent offset
+    savedDragX += currentDragX;
+    savedDragY += currentDragY;
     currentDragX = currentDragY = 0.0f;
 }
 

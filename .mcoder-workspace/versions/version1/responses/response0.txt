@@ -1,0 +1,52 @@
+# Analyzing the Mouse Inversion Issue
+
+## Understanding the Problem
+
+The mouse is currently inverted in the application, which means when users move the mouse in one direction, the view rotates in the opposite direction from what would feel natural. This is a common issue in camera control systems.
+
+Looking at the code, I can see that the mouse position is tracked and used to calculate camera orientation angles in the fragment shader. The issue is in how these angles are interpreted and applied.
+
+## Root Cause Analysis
+
+After examining the code, I've found that the problem is in the fragment shader in `ShaderSources.cpp`. The issue is with how the mouse position is mapped to camera angles:
+
+1. In the fragment shader, the mouse Y position is directly mapped to the vertical angle (pitch). When the mouse moves up (increasing Y), the vertical angle increases, which makes the camera look down - this is the opposite of what users would expect.
+
+2. Similarly, the horizontal mouse movement (X) is directly mapped to the horizontal angle (yaw). This creates an inverted left-right camera rotation.
+
+The natural expectation is:
+- Moving the mouse up → Camera looks up (decreasing pitch angle)
+- Moving the mouse down → Camera looks down (increasing pitch angle)
+- Moving the mouse left → Camera turns left (decreasing yaw angle)
+- Moving the mouse right → Camera turns right (increasing yaw angle)
+
+## Implementation Plan
+
+To fix this issue properly, I need to invert the relationship between mouse position and camera angles in the fragment shader. Specifically:
+
+1. For vertical movement (pitch): I'll invert the calculation by subtracting the normalized mouse Y position from 1.0 before scaling it. This will make the camera look up when the mouse moves up.
+
+2. For horizontal movement (yaw): I'll invert the calculation by using a negative multiplier for the mapping from mouse X to the horizontal angle.
+
+These changes ensure that the camera rotates in the expected direction based on mouse movement without requiring any changes to the mouse input handling itself.
+
+## Implementation
+
+Here's the implementation of the fix in the fragment shader:
+
+```mcdiff_xml
+<mcdiff file="./ShaderSources.cpp">
+<replace><old>    // Mouse-controlled camera rotation
+    float horizontalAngle = (u_mouse.x / u_resolution.x) * 2.0 * 3.14159; // Map mouse X to full rotation
+    float verticalAngle = (u_mouse.y / u_resolution.y) * 3.14159 * 0.5;   // Map mouse Y to limited tilt</old><new>    // Mouse-controlled camera rotation with natural (non-inverted) controls
+    float horizontalAngle = -(u_mouse.x / u_resolution.x) * 2.0 * 3.14159; // Map mouse X to full rotation (negative for natural control)
+    float verticalAngle = ((1.0 - u_mouse.y / u_resolution.y) - 0.5) * 3.14159 * 0.5; // Map mouse Y to limited tilt (inverted for natural control)</new></replace>
+</mcdiff>
+```
+
+This change directly addresses the root cause of the issue by:
+
+1. Adding a negative sign to the horizontalAngle calculation, which inverts the horizontal mouse movement
+2. Subtracting the normalized Y position from 1.0 and offsetting by 0.5 to center the vertical range, which inverts the vertical mouse movement and keeps the angle centered
+
+These changes should provide a natural mouse control experience without affecting any other part of the code. The camera will now look up when the mouse moves up, look down when the mouse moves down, turn left when the mouse moves left, and turn right when the mouse moves right.

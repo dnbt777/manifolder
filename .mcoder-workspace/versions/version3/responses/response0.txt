@@ -1,0 +1,82 @@
+# Bug Analysis: Left and Right Movement Inversion
+
+## Identifying the Bug
+
+The problem is that left and right movement controls are inverted when using the keyboard. This is a common issue in 3D applications where the frame of reference for movement does not match the user's expectations.
+
+Looking at the code, I can see that there are two areas that handle left-right movement:
+
+1. The fragment shader, which handles the camera rotation based on mouse position
+2. The main.cpp file, which handles keyboard input for WASD movement
+
+The issue specifically lies in how the keyboard WASD movement is mapped to the camera's view direction. The current implementation uses sin/cos values of the horizontal angle for movement, but there's a mismatch between how the direction vector is calculated and how it's used for movement.
+
+## Root Cause
+
+I've found the root cause in the `main.cpp` file. When handling left and right movements, the code is using incorrect calculations:
+
+```cpp
+// Strafe left/right (perpendicular to view direction)
+if (keyState.left) {
+    g_renderer->moveCamera(
+        -cos(horizontalAngle) * cameraSpeed,
+        0.0f,
+        sin(horizontalAngle) * cameraSpeed
+    );
+}
+if (keyState.right) {
+    g_renderer->moveCamera(
+        cos(horizontalAngle) * cameraSpeed,
+        0.0f,
+        -sin(horizontalAngle) * cameraSpeed
+    );
+}
+```
+
+The issue is in the directions being used. The code is using `-cos` and `sin` for left movement and `cos` and `-sin` for right movement. This is reversed from what would feel natural given the camera's orientation.
+
+## Implementation Plan
+
+To fix this issue, I need to flip the signs in the left/right movement calculation. Since strafing is perpendicular to the view direction, right strafing should use the coordinates (sin(angle+90°), 0, cos(angle+90°)) which is equivalent to (cos(angle), 0, -sin(angle)).
+
+Left strafing should use the opposite: (-cos(angle), 0, sin(angle)).
+
+The patch is quite simple - we just need to swap the signs in the movement code for the left/right movement calculations in main.cpp.
+
+## Implementation
+
+```mcdiff_xml
+<mcdiff file="./main.cpp">
+<replace><old>            // Strafe left/right (perpendicular to view direction)
+            if (keyState.left) {
+                g_renderer->moveCamera(
+                    -cos(horizontalAngle) * cameraSpeed,
+                    0.0f,
+                    sin(horizontalAngle) * cameraSpeed
+                );
+            }
+            if (keyState.right) {
+                g_renderer->moveCamera(
+                    cos(horizontalAngle) * cameraSpeed,
+                    0.0f,
+                    -sin(horizontalAngle) * cameraSpeed
+                );
+            }</old><new>            // Strafe left/right (perpendicular to view direction)
+            if (keyState.left) {
+                g_renderer->moveCamera(
+                    cos(horizontalAngle) * cameraSpeed,
+                    0.0f,
+                    -sin(horizontalAngle) * cameraSpeed
+                );
+            }
+            if (keyState.right) {
+                g_renderer->moveCamera(
+                    -cos(horizontalAngle) * cameraSpeed,
+                    0.0f,
+                    sin(horizontalAngle) * cameraSpeed
+                );
+            }</new></replace>
+</mcdiff>
+```
+
+This fix swaps the signs for left and right movement, effectively fixing the inverted controls. The new code applies the correct perpendicular vector calculation for strafing, which matches player expectations when using A and D keys for left/right movement.

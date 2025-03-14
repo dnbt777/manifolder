@@ -1,0 +1,593 @@
+# Implementation Plan: Draggable Ball Independent of Camera Movement
+
+## Understanding the Bug
+
+The current implementation has the sphere's position directly linked to dragging, but there are a couple of issues:
+
+1. The sphere's movement is being controlled through a uniform `u_dragOffset` in the shader
+2. Mouse dragging is tracked globally, but the sphere's position is not persisted independently
+3. When the camera moves using WASD keys, the sphere's position in world space changes with it 
+4. The sphere needs to be draggable and placeable at any arbitrary location, even during camera movement
+
+The key issue is that the sphere position is determined by a drag offset in screenspace coordinates that doesn't properly account for camera movement and perspective. We need to implement proper world-space positioning that's independent of the camera.
+
+## Implementation Plan
+
+1. **Update the shader code to handle independent object positioning**:
+   - Modify the fragment shader to use a world-space position for the sphere rather than a drag offset
+   - Keep the sphere's position separate from the camera position
+
+2. **Add sphere position tracking to the SDFRenderer class**:
+   - Add variables to track the sphere's world position (spherePositionX, spherePositionY, spherePositionZ)
+   - Add methods to move/set the sphere position
+
+3. **Implement raycasting to calculate world-space positions**:
+   - When the user clicks and drags, we need to convert screen-space movement to world-space movement
+   - Implement proper depth perception so the sphere moves on a plane relative to the camera view
+
+4. **Fix the mouse dragging mechanics**:
+   - Update the mouse handling to properly move the sphere in world-space
+   - Ensure the sphere stays in place when the camera moves
+   - Make the drag behavior feel intuitive from the user's perspective
+
+Let's now implement these changes:
+
+## Implementation
+
+First, I'll update the ShaderSources.cpp file with the updated fragment shader that uses world-space positioning:
+
+```mcdiff_xml
+<mcdiff file="./ShaderSources.cpp">
+<replace><old>// SDF for a sphere: distance to a sphere of radius 0.5
+float sdfSphere(vec3 p) {
+    return length(p) - 0.5;
+}
+
+// SDF for a cube: distance to a cube with side length 1.0
+float sdfCube(vec3 p) {
+    vec3 d = abs(p) - vec3(0.5); // Half-size of cube is 0.5
+    return length(max(d, 0.0)) + min(max(d.x, max(d.y, d.z)), 0.0);
+}
+
+// Smooth minimum: blends two distances smoothly
+float smoothMin(float a, float b, float k) {
+    float h = max(k - abs(a - b), 0.0) / k;
+    return min(a, b) - h * h * k * 0.25;
+}
+
+uniform vec2 u_dragOffset;  // Mouse drag offset
+uniform float u_isDragging; // Whether mouse is being dragged
+
+// Shape-specific SDFs with offsets
+float sdfSphereWithOffset(vec3 p) {
+    // Move sphere based on drag offset (scale factor adjusts sensitivity)
+    vec3 sphereOffset = vec3(u_dragOffset.x / 200.0, -u_dragOffset.y / 200.0, 0.0);
+    return sdfSphere(p - sphereOffset);
+}
+
+float sdfCubeWithOffset(vec3 p) {
+    // Cube stays at origin
+    return sdfCube(p);
+}
+
+// Combined SDF: merges sphere and cube
+float sdfScene(vec3 p) {
+    float sphere = sdfSphereWithOffset(p);
+    float cube = sdfCubeWithOffset(p);
+    return smoothMin(sphere, cube, 0.3); // k=0.3 controls smoothness
+}
+
+// Check which shape is being hit (returns 1 for sphere, 2 for cube, 0 for none)
+int getHitShape(vec3 p) {
+    float sphere = sdfSphereWithOffset(p);
+    float cube = sdfCubeWithOffset(p);
+    
+    // Check which shape is closer (with a small threshold)
+    if (sphere < 0.01 && sphere < cube) return 1; // Sphere
+    if (cube < 0.01 && cube <= sphere) return 2;  // Cube
+    return 0; // No hit
+}</old><new>// SDF for a sphere: distance to a sphere of radius 0.5
+float sdfSphere(vec3 p) {
+    return length(p) - 0.5;
+}
+
+// SDF for a cube: distance to a cube with side length 1.0
+float sdfCube(vec3 p) {
+    vec3 d = abs(p) - vec3(0.5); // Half-size of cube is 0.5
+    return length(max(d, 0.0)) + min(max(d.x, max(d.y, d.z)), 0.0);
+}
+
+// Smooth minimum: blends two distances smoothly
+float smoothMin(float a, float b, float k) {
+    float h = max(k - abs(a - b), 0.0) / k;
+    return min(a, b) - h * h * k * 0.25;
+}
+
+// World-space position for the sphere
+uniform vec3 u_spherePosition;
+uniform float u_isDragging; // Whether mouse is being dragged
+
+// Shape-specific SDFs with absolute positioning
+float sdfSphereWithPosition(vec3 p) {
+    // Position sphere at its world-space coordinates
+    return sdfSphere(p - u_spherePosition);
+}
+
+float sdfCubeWithPosition(vec3 p) {
+    // Cube stays at origin
+    return sdfCube(p);
+}
+
+// Combined SDF: merges sphere and cube
+float sdfScene(vec3 p) {
+    float sphere = sdfSphereWithPosition(p);
+    float cube = sdfCubeWithPosition(p);
+    return smoothMin(sphere, cube, 0.3); // k=0.3 controls smoothness
+}
+
+// Check which shape is being hit (returns 1 for sphere, 2 for cube, 0 for none)
+int getHitShape(vec3 p) {
+    float sphere = sdfSphereWithPosition(p);
+    float cube = sdfCubeWithPosition(p);
+    
+    // Check which shape is closer (with a small threshold)
+    if (sphere < 0.01 && sphere < cube) return 1; // Sphere
+    if (cube < 0.01 && cube <= sphere) return 2;  // Cube
+    return 0; // No hit
+}</new></replace>
+</mcdiff>
+
+Now I'll update the SDFRenderer.h file to add sphere position tracking:
+
+```mcdiff_xml
+<mcdiff file="./SDFRenderer.h">
+<replace><old>class SDFRenderer {
+public:
+    // Constructor
+    SDFRenderer();
+    
+    // Initialize the renderer
+    bool initialize();
+    
+    // Render the scene with current time
+    void render(float time);
+    
+    // Clean up resources
+    void cleanup();
+    
+    // Destructor
+    ~SDFRenderer();
+    
+    // Set mouse position (for interactive effects)
+    void setMousePosition(float x, float y);
+    
+    // Update window size (for proper aspect ratio)
+    void setWindowSize(int w, int h);
+
+    // Set mouse button state (for tracking drag operations)
+    void setMouseButtonState(bool pressed);
+    
+    // Set drag start position
+    void setMouseDragStart(float x, float y);
+    
+    // Store current drag offset as permanent offset
+    void storeDragOffset();
+    
+    // Camera movement methods
+    void moveCamera(float dx, float dy, float dz);
+    void setCameraPosition(float x, float y, float z);
+    
+private:
+    // OpenGL objects
+    GLuint VAO, VBO, EBO;
+    
+    // Camera position in 3D space
+    float cameraX, cameraY, cameraZ;
+    
+    // Shader program
+    Shader shader;
+    
+    // Window dimensions
+    int width, height;
+    
+    // Mouse position
+    float mouseX, mouseY;
+    
+    // Mouse drag handling
+    bool mouseLeftPressed;
+    float dragStartX, dragStartY;
+    float currentDragX, currentDragY;
+    float savedDragX, savedDragY;
+    
+    // Shape-specific dragging
+    bool draggingShape;
+    int selectedShape; // 0=none, 1=sphere, 2=cube
+};</old><new>class SDFRenderer {
+public:
+    // Constructor
+    SDFRenderer();
+    
+    // Initialize the renderer
+    bool initialize();
+    
+    // Render the scene with current time
+    void render(float time);
+    
+    // Clean up resources
+    void cleanup();
+    
+    // Destructor
+    ~SDFRenderer();
+    
+    // Set mouse position (for interactive effects)
+    void setMousePosition(float x, float y);
+    
+    // Update window size (for proper aspect ratio)
+    void setWindowSize(int w, int h);
+
+    // Set mouse button state (for tracking drag operations)
+    void setMouseButtonState(bool pressed);
+    
+    // Set drag start position
+    void setMouseDragStart(float x, float y);
+    
+    // Handle mouse drag operation (returns true if dragging the sphere)
+    bool handleMouseDrag();
+    
+    // Camera movement methods
+    void moveCamera(float dx, float dy, float dz);
+    void setCameraPosition(float x, float y, float z);
+    
+    // Calculate ray from screen position
+    void screenToRay(float screenX, float screenY, float& dirX, float& dirY, float& dirZ);
+    
+    // Calculate world position from screen position and desired depth
+    bool screenToWorldPosition(float screenX, float screenY, float depth, 
+                              float& worldX, float& worldY, float& worldZ);
+    
+    // Get ray-plane intersection
+    bool rayPlaneIntersection(float rayStartX, float rayStartY, float rayStartZ,
+                             float rayDirX, float rayDirY, float rayDirZ,
+                             float planeX, float planeY, float planeZ,
+                             float planeNormalX, float planeNormalY, float planeNormalZ,
+                             float& intersectX, float& intersectY, float& intersectZ);
+                             
+private:
+    // OpenGL objects
+    GLuint VAO, VBO, EBO;
+    
+    // Camera position in 3D space
+    float cameraX, cameraY, cameraZ;
+    
+    // Sphere position in world space
+    float sphereX, sphereY, sphereZ;
+    
+    // Shader program
+    Shader shader;
+    
+    // Window dimensions
+    int width, height;
+    
+    // Mouse position
+    float mouseX, mouseY;
+    
+    // Previous mouse position (for dragging)
+    float prevMouseX, prevMouseY;
+    
+    // Mouse drag handling
+    bool mouseLeftPressed;
+    float dragStartX, dragStartY;
+    float dragPlaneZ; // Z depth of the drag plane
+    
+    // Shape-specific dragging
+    bool draggingShape;
+    int selectedShape; // 0=none, 1=sphere, 2=cube
+};</new></replace>
+</mcdiff>
+
+Now I'll update the SDFRenderer.cpp file to implement the new methods and functionality:
+
+```mcdiff_xml
+<mcdiff file="./SDFRenderer.cpp">
+<replace><old>SDFRenderer::SDFRenderer() : VAO(0), VBO(0), EBO(0), width(800), height(600), mouseX(0.0f), mouseY(0.0f),
+    mouseLeftPressed(false), dragStartX(0.0f), dragStartY(0.0f), currentDragX(0.0f), currentDragY(0.0f),
+    savedDragX(0.0f), savedDragY(0.0f), cameraX(0.0f), cameraY(0.0f), cameraZ(2.0f),
+    draggingShape(false), selectedShape(0) {
+    // Initialize global camera position
+    ::cameraX = 0.0f;
+    ::cameraY = 0.0f;
+    ::cameraZ = 2.0f;
+    ::cameraSpeed = 0.1f;
+}</old><new>SDFRenderer::SDFRenderer() : VAO(0), VBO(0), EBO(0), width(800), height(600), mouseX(0.0f), mouseY(0.0f),
+    prevMouseX(0.0f), prevMouseY(0.0f), mouseLeftPressed(false), dragStartX(0.0f), dragStartY(0.0f), 
+    dragPlaneZ(0.0f), cameraX(0.0f), cameraY(0.0f), cameraZ(2.0f),
+    sphereX(0.0f), sphereY(0.0f), sphereZ(0.0f),
+    draggingShape(false), selectedShape(0) {
+    // Initialize global camera position
+    ::cameraX = 0.0f;
+    ::cameraY = 0.0f;
+    ::cameraZ = 2.0f;
+    ::cameraSpeed = 0.1f;
+}</new></replace>
+
+<replace><old>void SDFRenderer::render(float time) {
+    // Use shader
+    shader.use();
+    
+    // Calculate drag offset if mouse is pressed
+    if (mouseLeftPressed) {
+        currentDragX = mouseX - dragStartX;
+        currentDragY = mouseY - dragStartY;
+    }
+    
+    // Set uniforms
+    shader.setVec2("u_resolution", static_cast<float>(width), static_cast<float>(height));
+    shader.setFloat("u_time", time);
+    shader.setVec2("u_mouse", mouseX, mouseY);
+    shader.setVec2("u_dragOffset", savedDragX + currentDragX, savedDragY + currentDragY);
+    shader.setFloat("u_isDragging", mouseLeftPressed ? 1.0f : 0.0f);
+    
+    // Set camera position uniform
+    shader.setVec3("u_cameraPos", cameraX, cameraY, cameraZ);
+    
+    // Draw quad
+    glBindVertexArray(VAO);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+}</old><new>void SDFRenderer::render(float time) {
+    // Use shader
+    shader.use();
+    
+    // Handle dragging if left mouse button is pressed
+    if (mouseLeftPressed) {
+        handleMouseDrag();
+    }
+    
+    // Set uniforms
+    shader.setVec2("u_resolution", static_cast<float>(width), static_cast<float>(height));
+    shader.setFloat("u_time", time);
+    shader.setVec2("u_mouse", mouseX, mouseY);
+    shader.setFloat("u_isDragging", mouseLeftPressed ? 1.0f : 0.0f);
+    
+    // Set camera position uniform
+    shader.setVec3("u_cameraPos", cameraX, cameraY, cameraZ);
+    
+    // Set sphere position uniform
+    shader.setVec3("u_spherePosition", sphereX, sphereY, sphereZ);
+    
+    // Draw quad
+    glBindVertexArray(VAO);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    
+    // Update previous mouse position for next frame
+    prevMouseX = mouseX;
+    prevMouseY = mouseY;
+}</new></replace>
+
+<replace><old>void SDFRenderer::setMouseButtonState(bool pressed) {
+    mouseLeftPressed = pressed;
+    if (!pressed) {
+        currentDragX = currentDragY = 0.0f;
+    }
+}
+
+void SDFRenderer::setMouseDragStart(float x, float y) {
+    dragStartX = x;
+    dragStartY = y;
+    currentDragX = currentDragY = 0.0f;
+}
+
+void SDFRenderer::storeDragOffset() {
+    // Save current drag as permanent offset
+    savedDragX += currentDragX;
+    savedDragY += currentDragY;
+    currentDragX = currentDragY = 0.0f;
+}</old><new>void SDFRenderer::setMouseButtonState(bool pressed) {
+    mouseLeftPressed = pressed;
+    
+    if (pressed) {
+        // When we start dragging, set the drag plane to be perpendicular to the view
+        // at the depth of the sphere
+        dragPlaneZ = sphereZ;
+        
+        // We'll update selectedShape in handleMouseDrag based on what's under the cursor
+    }
+    else {
+        // Clear dragging state
+        draggingShape = false;
+        selectedShape = 0;
+    }
+}
+
+void SDFRenderer::setMouseDragStart(float x, float y) {
+    dragStartX = x;
+    dragStartY = y;
+}
+
+bool SDFRenderer::handleMouseDrag() {
+    if (!mouseLeftPressed) return false;
+    
+    // If this is the first frame of dragging, check what's under the cursor
+    if (!draggingShape) {
+        // Calculate ray direction from screen coordinates
+        float rayDirX, rayDirY, rayDirZ;
+        screenToRay(mouseX, mouseY, rayDirX, rayDirY, rayDirZ);
+        
+        // Simple ray-sphere intersection test to see if we're clicking on the sphere
+        // This is a simplified version; a more robust solution would use the SDF
+        float dx = cameraX - sphereX;
+        float dy = cameraY - sphereY;
+        float dz = cameraZ - sphereZ;
+        
+        float a = rayDirX*rayDirX + rayDirY*rayDirY + rayDirZ*rayDirZ;
+        float b = 2.0f * (rayDirX*dx + rayDirY*dy + rayDirZ*dz);
+        float c = dx*dx + dy*dy + dz*dz - 0.5f*0.5f;  // 0.5 is sphere radius
+        
+        float discriminant = b*b - 4*a*c;
+        
+        if (discriminant >= 0) {
+            // Hit the sphere
+            draggingShape = true;
+            selectedShape = 1;
+        }
+    }
+    
+    // If we're dragging the sphere, move it in the camera's view plane
+    if (draggingShape && selectedShape == 1) {
+        // Calculate world positions for the current and previous mouse positions
+        float worldX, worldY, worldZ;
+        float prevWorldX, prevWorldY, prevWorldZ;
+        
+        // Using the sphere's Z distance from camera as our drag plane
+        float dragDepth = sqrtf((sphereX - cameraX)*(sphereX - cameraX) + 
+                                (sphereY - cameraY)*(sphereY - cameraY) + 
+                                (sphereZ - cameraZ)*(sphereZ - cameraZ));
+        
+        if (screenToWorldPosition(mouseX, mouseY, dragDepth, worldX, worldY, worldZ) &&
+            screenToWorldPosition(prevMouseX, prevMouseY, dragDepth, prevWorldX, prevWorldY, prevWorldZ)) {
+            
+            // Calculate the difference and update the sphere position
+            float dx = worldX - prevWorldX;
+            float dy = worldY - prevWorldY;
+            float dz = worldZ - prevWorldZ;
+            
+            sphereX += dx;
+            sphereY += dy;
+            sphereZ += dz;
+            
+            return true;
+        }
+    }
+    
+    return false;
+}</new></replace>
+
+<replace><old></old><new>void SDFRenderer::screenToRay(float screenX, float screenY, float& dirX, float& dirY, float& dirZ) {
+    // Convert screen coordinates to normalized device coordinates (-1 to 1)
+    float ndcX = (2.0f * screenX / width) - 1.0f;
+    float ndcY = 1.0f - (2.0f * screenY / height); // Flip Y
+    
+    // Calculate horizontal angle from mouse X position
+    float horizontalAngle = -(screenX / width) * 2.0f * 3.14159f;
+    float verticalAngle = ((1.0f - screenY / height) - 0.5f) * 3.14159f * 0.5f;
+    
+    // Calculate view direction based on mouse position
+    float lookDirX = sin(horizontalAngle) * cos(verticalAngle);
+    float lookDirY = sin(verticalAngle);
+    float lookDirZ = cos(horizontalAngle) * cos(verticalAngle);
+    
+    // Normalize to get a unit vector
+    float len = sqrt(lookDirX*lookDirX + lookDirY*lookDirY + lookDirZ*lookDirZ);
+    dirX = lookDirX / len;
+    dirY = lookDirY / len;
+    dirZ = lookDirZ / len;
+}
+
+bool SDFRenderer::screenToWorldPosition(float screenX, float screenY, float depth, 
+                                       float& worldX, float& worldY, float& worldZ) {
+    // Calculate ray direction from screen position
+    float rayDirX, rayDirY, rayDirZ;
+    screenToRay(screenX, screenY, rayDirX, rayDirY, rayDirZ);
+    
+    // Calculate ray start point (camera position)
+    float rayStartX = cameraX;
+    float rayStartY = cameraY;
+    float rayStartZ = cameraZ;
+    
+    // Create a plane that's perpendicular to the ray from camera to sphere
+    float planeNormalX = sphereX - cameraX;
+    float planeNormalY = sphereY - cameraY;
+    float planeNormalZ = sphereZ - cameraZ;
+    
+    // Normalize the plane normal
+    float normalLen = sqrt(planeNormalX*planeNormalX + planeNormalY*planeNormalY + planeNormalZ*planeNormalZ);
+    if (normalLen < 0.0001f) return false; // Avoid division by zero
+    
+    planeNormalX /= normalLen;
+    planeNormalY /= normalLen;
+    planeNormalZ /= normalLen;
+    
+    // Get the intersection of the ray with a plane at the sphere's distance
+    return rayPlaneIntersection(
+        rayStartX, rayStartY, rayStartZ,
+        rayDirX, rayDirY, rayDirZ,
+        sphereX, sphereY, sphereZ, // Point on plane (using sphere position)
+        planeNormalX, planeNormalY, planeNormalZ,
+        worldX, worldY, worldZ
+    );
+}
+
+bool SDFRenderer::rayPlaneIntersection(
+    float rayStartX, float rayStartY, float rayStartZ,
+    float rayDirX, float rayDirY, float rayDirZ,
+    float planeX, float planeY, float planeZ,
+    float planeNormalX, float planeNormalY, float planeNormalZ,
+    float& intersectX, float& intersectY, float& intersectZ) {
+    
+    // Calculate dot product of ray direction and plane normal
+    float denom = rayDirX * planeNormalX + rayDirY * planeNormalY + rayDirZ * planeNormalZ;
+    
+    // If ray is parallel to plane, no intersection
+    if (fabs(denom) < 0.0001f) return false;
+    
+    // Calculate distance from ray start to plane
+    float t = ((planeX - rayStartX) * planeNormalX + 
+               (planeY - rayStartY) * planeNormalY + 
+               (planeZ - rayStartZ) * planeNormalZ) / denom;
+    
+    // If t is negative, plane is behind ray start
+    if (t < 0) return false;
+    
+    // Calculate intersection point
+    intersectX = rayStartX + rayDirX * t;
+    intersectY = rayStartY + rayDirY * t;
+    intersectZ = rayStartZ + rayDirZ * t;
+    
+    return true;
+}</new></replace>
+</mcdiff>
+
+Finally, I need to update the main.cpp file to use our new mouse handling:
+
+```mcdiff_xml
+<mcdiff file="./main.cpp">
+<replace><old>// Mouse callback function
+void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
+    if (g_renderer) {
+        g_renderer->setMousePosition(static_cast<float>(xpos), static_cast<float>(ypos));
+    }
+}</old><new>// Mouse callback function
+void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
+    if (g_renderer) {
+        g_renderer->setMousePosition(static_cast<float>(xpos), static_cast<float>(ypos));
+    }
+}</new></replace>
+
+<replace><old>    // Lock cursor to window
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);</old><new>    // Allow cursor to move freely for sphere dragging
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);</new></replace>
+</mcdiff>
+
+## Explanation of the Changes
+
+1. **Updated the Fragment Shader**:
+   - Replaced the drag offset approach with a world-space position for the sphere
+   - Added a uniform `u_spherePosition` to control the sphere's world position from the CPU side
+
+2. **Enhanced the SDFRenderer Class**:
+   - Added variables to track the sphere's position in world coordinates
+   - Implemented raycasting from screen to world space for drag operations
+   - Added new methods for handling mouse drag and converting screen coordinates to world positions
+
+3. **Added Raytracing Utilities**:
+   - Created helper methods to calculate ray directions from screen positions
+   - Implemented ray-plane intersection for moving objects in 3D space
+   - Used the sphere's distance from the camera to create a drag plane
+
+4. **Updated Mouse Handling**:
+   - Changed the mouse cursor mode to be visible and free (rather than locked)
+   - Implemented a proper dragging system that checks if the mouse is over the sphere
+   - Made the sphere position independent of camera movement
+
+These changes accomplish our goal - now the user can drag the sphere anywhere in 3D space, place it where they want, and the sphere will stay in that world position even when the camera moves with WASD keys.
+
+The key improvement is that we now store the sphere's absolute position in world coordinates rather than a relative offset. This ensures the sphere doesn't move when the camera does, and we use proper 3D raycasting to convert mouse movements on the 2D screen to 3D world movements.

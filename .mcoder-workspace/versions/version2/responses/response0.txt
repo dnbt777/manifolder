@@ -1,0 +1,112 @@
+# Bug Analysis: WASD Movement Issue in Camera Navigation
+
+## Problem Identification
+The issue is that the WASD movement doesn't work correctly when the camera isn't facing the original direction. This happens because the movement directions are calculated relative to the camera's view direction, but there's a problem with how these directions are determined.
+
+When examining the code, I can see that the movement directions in the `main.cpp` are being calculated based on the horizontal angle derived from mouse position, but there are two key issues:
+
+1. The horizontal angle is calculated incorrectly. The formula `(xpos / width) * 2.0f * 3.14159f` maps the mouse X position from 0 to width to a range of 0 to 2π, which means looking straight ahead would correspond to a mouse position in the middle of the screen. However, this isn't aligned with how the angle is used in the fragment shader.
+
+2. The strafe movement calculations (left/right) have incorrect signs. When the camera is rotated, the strafe directions should remain perpendicular to the view direction, but the current implementation has reversed signs.
+
+## Implementation Plan
+
+I'll fix the issue by:
+
+1. Making the horizontal angle calculation consistent with how it's used in the shader. In the shader, we're using `float horizontalAngle = -(u_mouse.x / u_resolution.x) * 2.0 * 3.14159;` with a negative sign to make controls natural. We should match this in the main.cpp file.
+
+2. Correcting the strafe movement directions (left/right) to properly remain perpendicular to the view direction.
+
+3. Ensuring the forward/backward movement aligns with the view direction correctly.
+
+Let's change the key movement handling code in main.cpp to fix these issues.
+
+## Implementation
+
+```mcdiff_xml
+<mcdiff file="main.cpp">
+<replace><old>            // Calculate horizontal angle
+            float horizontalAngle = (float)(xpos / width) * 2.0f * 3.14159f;
+            
+            // Camera speed scaled by delta time for consistent movement
+            float cameraSpeed = 2.0f * deltaTime;
+            
+            // Forward/backward movement along view direction
+            if (keyState.forward) {
+                g_renderer->moveCamera(
+                    sin(horizontalAngle) * cameraSpeed,
+                    0.0f,
+                    cos(horizontalAngle) * cameraSpeed
+                );
+            }
+            if (keyState.backward) {
+                g_renderer->moveCamera(
+                    -sin(horizontalAngle) * cameraSpeed,
+                    0.0f,
+                    -cos(horizontalAngle) * cameraSpeed
+                );
+            }
+            
+            // Strafe left/right (perpendicular to view direction)
+            if (keyState.left) {
+                g_renderer->moveCamera(
+                    cos(horizontalAngle) * cameraSpeed,
+                    0.0f,
+                    -sin(horizontalAngle) * cameraSpeed
+                );
+            }
+            if (keyState.right) {
+                g_renderer->moveCamera(
+                    -cos(horizontalAngle) * cameraSpeed,
+                    0.0f,
+                    sin(horizontalAngle) * cameraSpeed
+                );
+            }</old><new>            // Calculate horizontal angle - use negative for consistent control with shader
+            float horizontalAngle = -(float)(xpos / width) * 2.0f * 3.14159f;
+            
+            // Camera speed scaled by delta time for consistent movement
+            float cameraSpeed = 2.0f * deltaTime;
+            
+            // Forward/backward movement along view direction
+            if (keyState.forward) {
+                g_renderer->moveCamera(
+                    sin(horizontalAngle) * cameraSpeed,
+                    0.0f,
+                    cos(horizontalAngle) * cameraSpeed
+                );
+            }
+            if (keyState.backward) {
+                g_renderer->moveCamera(
+                    -sin(horizontalAngle) * cameraSpeed,
+                    0.0f,
+                    -cos(horizontalAngle) * cameraSpeed
+                );
+            }
+            
+            // Strafe left/right (perpendicular to view direction)
+            if (keyState.left) {
+                g_renderer->moveCamera(
+                    -cos(horizontalAngle) * cameraSpeed,
+                    0.0f,
+                    sin(horizontalAngle) * cameraSpeed
+                );
+            }
+            if (keyState.right) {
+                g_renderer->moveCamera(
+                    cos(horizontalAngle) * cameraSpeed,
+                    0.0f,
+                    -sin(horizontalAngle) * cameraSpeed
+                );
+            }</new></replace>
+</mcdiff>
+```
+
+The key changes made are:
+
+1. Changed the horizontal angle calculation to include a negative sign: `-(float)(xpos / width) * 2.0f * 3.14159f` to match the shader's angle calculation.
+
+2. Flipped the signs in the strafe movement calculations:
+   - For left movement: Changed from `cos(horizontalAngle)` to `-cos(horizontalAngle)` and from `-sin(horizontalAngle)` to `sin(horizontalAngle)`
+   - For right movement: Changed from `-cos(horizontalAngle)` to `cos(horizontalAngle)` and from `sin(horizontalAngle)` to `-sin(horizontalAngle)`
+
+This ensures that when you press the WASD keys, the character moves in the expected direction relative to where the camera is pointing, making the movement controls feel natural and consistent.

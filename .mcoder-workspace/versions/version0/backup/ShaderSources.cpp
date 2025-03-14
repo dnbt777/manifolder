@@ -24,7 +24,6 @@ uniform vec2 u_resolution; // Window size (e.g., 800x600)
 uniform float u_time;      // Time for camera rotation
 uniform vec2 u_mouse;      // Mouse position in screen coordinates
 uniform vec3 u_cameraPos;  // Camera position in 3D space
-uniform vec3 u_spherePosition; // World position of the sphere
 
 // SDF for a sphere: distance to a sphere of radius 0.5
 float sdfSphere(vec3 p) {
@@ -43,35 +42,16 @@ float smoothMin(float a, float b, float k) {
     return min(a, b) - h * h * k * 0.25;
 }
 
+uniform vec2 u_dragOffset;  // Mouse drag offset
 uniform float u_isDragging; // Whether mouse is being dragged
-
-// Shape-specific SDFs with world position
-float sdfSphereWithPosition(vec3 p) {
-    // Move sphere based on its world position
-    return sdfSphere(p - u_spherePosition);
-}
-
-float sdfCubeWithOffset(vec3 p) {
-    // Cube stays at origin
-    return sdfCube(p);
-}
 
 // Combined SDF: merges sphere and cube
 float sdfScene(vec3 p) {
-    float sphere = sdfSphereWithPosition(p);
-    float cube = sdfCubeWithOffset(p);
+    // Move sphere based on drag offset (scale factor adjusts sensitivity)
+    vec3 sphereOffset = vec3(u_dragOffset.x / 200.0, -u_dragOffset.y / 200.0, 0.0);
+    float sphere = sdfSphere(p - sphereOffset);
+    float cube = sdfCube(p);
     return smoothMin(sphere, cube, 0.3); // k=0.3 controls smoothness
-}
-
-// Check which shape is being hit (returns 1 for sphere, 2 for cube, 0 for none)
-int getHitShape(vec3 p) {
-    float sphere = sdfSphereWithPosition(p);
-    float cube = sdfCubeWithOffset(p);
-    
-    // Check which shape is closer (with a small threshold)
-    if (sphere < 0.01 && sphere < cube) return 1; // Sphere
-    if (cube < 0.01 && cube <= sphere) return 2;  // Cube
-    return 0; // No hit
 }
 
 // Raymarching: traces a ray to find the scene
@@ -103,9 +83,9 @@ void main() {
     vec2 uv = (gl_FragCoord.xy / u_resolution.xy) * 2.0 - 1.0;
     uv.x *= u_resolution.x / u_resolution.y;
 
-    // Mouse-controlled camera rotation with natural (non-inverted) controls
-    float horizontalAngle = -(u_mouse.x / u_resolution.x) * 2.0 * 3.14159; // Map mouse X to full rotation (negative for natural control)
-    float verticalAngle = ((1.0 - u_mouse.y / u_resolution.y) - 0.5) * 3.14159 * 0.5; // Map mouse Y to limited tilt (inverted for natural control)
+    // Mouse-controlled camera rotation (flip the horizontal direction to fix inversion)
+    float horizontalAngle = -(u_mouse.x / u_resolution.x) * 2.0 * 3.14159; // Map mouse X to full rotation (negative for correct direction)
+    float verticalAngle = (u_mouse.y / u_resolution.y) * 3.14159 * 0.5;   // Map mouse Y to limited tilt
     
     // Use camera position from uniform
     vec3 ro = u_cameraPos;
@@ -124,7 +104,7 @@ void main() {
     // Ray direction with perspective
     vec3 rd = normalize(forward + uv.x * right + uv.y * up);
     
-    // Check if the center ray (cursor) is pointing at an object
+    // Check if the center ray hits an object (for cursor interaction)
     bool centerRay = abs(uv.x) < 0.01 && abs(uv.y) < 0.01;
 
     // Raymarch the scene
@@ -132,31 +112,16 @@ void main() {
     if (t > 0.0) { // Hit the merged shape
         vec3 p = ro + rd * t; // Hit point
         vec3 normal = getNormal(p); // Surface normal
-        
-        // Check which shape we hit
-        int hitShape = getHitShape(p);
 
         // Lighting: fixed light at (2, 2, 2)
         vec3 lightPos = vec3(2.0, 2.0, 2.0);
         vec3 lightDir = normalize(lightPos - p);
         float diffuse = max(dot(normal, lightDir), 0.0); // Diffuse lighting
         vec3 ambient = vec3(0.1); // Ambient light
-        
-        // Color selection based on cursor position
-        vec3 baseColor;
-        if (centerRay) {
-            // If cursor is over a shape, make it blue
-            baseColor = vec3(0.2, 0.4, 0.9); // Blue for hover state
-        } else {
-            // Normal color based on shape
-            if (hitShape == 1) {
-                baseColor = vec3(0.8, 0.2, 0.2);
-            } else {
-                baseColor = vec3(0.8, 0.2, 0.2); 
-            }
-        }
-        
+        // Change color to green if center ray is hitting the object
+        vec3 baseColor = centerRay ? vec3(0.2, 0.8, 0.2) : vec3(0.8, 0.2, 0.2);
         vec3 color = baseColor * diffuse + ambient;
+
         FragColor = vec4(color, 1.0); // Output color
     } else {
                 FragColor = vec4(0.0, 0.0, 0.2, 1.0); // Dark blue background

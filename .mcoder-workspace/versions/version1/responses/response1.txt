@@ -1,0 +1,39 @@
+# Plan: Fixing the Mouse Inversion Issue
+
+## Bug Analysis
+
+After examining the code, I've identified the root cause of the mouse inversion issue. The problem is in the fragment shader (in ShaderSources.cpp), specifically in how the mouse position is used to calculate camera orientation.
+
+The bug is in these lines of the fragment shader:
+
+```glsl
+// Mouse-controlled camera rotation
+float horizontalAngle = (u_mouse.x / u_resolution.x) * 2.0 * 3.14159; // Map mouse X to full rotation
+float verticalAngle = (u_mouse.y / u_resolution.y) * 3.14159 * 0.5;   // Map mouse Y to limited tilt
+```
+
+This code directly maps the mouse Y coordinate to the vertical camera angle. The issue is that increasing mouse Y values correspond to moving down the screen, but the angle is being set to increase as Y increases. This creates the inverted feeling where moving the mouse down causes the camera to look up, and vice versa.
+
+Another key point is that in the main.cpp, the cursor is set to disabled mode with `glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED)`, which is a common approach for first-person camera controls. In this mode, mouse movement is usually measured as deltas (changes) rather than absolute positions to create the right feeling of camera rotation.
+
+## Implementation Plan
+
+To fix this issue comprehensively, I'll:
+
+1. Modify the fragment shader to invert the vertical component of the mouse input by adding a negative sign before the vertical angle calculation.
+
+2. This is a proper solution because it addresses the root cause - how the mouse Y coordinate is mapped to the vertical camera angle, rather than applying a band-aid fix elsewhere in the code.
+
+## Implementation
+
+I'll make a small change to the fragment shader source in ShaderSources.cpp, adding a negative sign to invert the vertical angle calculation.
+
+```mcdiff_xml
+<mcdiff file="./ShaderSources.cpp">
+<replace><old>float verticalAngle = (u_mouse.y / u_resolution.y) * 3.14159 * 0.5;   // Map mouse Y to limited tilt</old><new>float verticalAngle = -(u_mouse.y / u_resolution.y) * 3.14159 * 0.5;   // Map mouse Y to limited tilt (negated for correct orientation)</new></replace>
+</mcdiff>
+```
+
+This simple change ensures that when you move the mouse down, the camera looks down, and when you move the mouse up, the camera looks up - which is the natural, non-inverted behavior users expect.
+
+The negative sign reverses the interpretation of the mouse's Y coordinate, making the camera movement feel natural and intuitive by inverting the previous inverted behavior.

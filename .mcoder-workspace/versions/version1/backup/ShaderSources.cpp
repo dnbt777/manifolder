@@ -24,7 +24,6 @@ uniform vec2 u_resolution; // Window size (e.g., 800x600)
 uniform float u_time;      // Time for camera rotation
 uniform vec2 u_mouse;      // Mouse position in screen coordinates
 uniform vec3 u_cameraPos;  // Camera position in 3D space
-uniform vec3 u_spherePosition; // World position of the sphere
 
 // SDF for a sphere: distance to a sphere of radius 0.5
 float sdfSphere(vec3 p) {
@@ -43,12 +42,14 @@ float smoothMin(float a, float b, float k) {
     return min(a, b) - h * h * k * 0.25;
 }
 
+uniform vec2 u_dragOffset;  // Mouse drag offset
 uniform float u_isDragging; // Whether mouse is being dragged
 
-// Shape-specific SDFs with world position
-float sdfSphereWithPosition(vec3 p) {
-    // Move sphere based on its world position
-    return sdfSphere(p - u_spherePosition);
+// Shape-specific SDFs with offsets
+float sdfSphereWithOffset(vec3 p) {
+    // Move sphere based on drag offset (scale factor adjusts sensitivity)
+    vec3 sphereOffset = vec3(u_dragOffset.x / 200.0, -u_dragOffset.y / 200.0, 0.0);
+    return sdfSphere(p - sphereOffset);
 }
 
 float sdfCubeWithOffset(vec3 p) {
@@ -58,14 +59,14 @@ float sdfCubeWithOffset(vec3 p) {
 
 // Combined SDF: merges sphere and cube
 float sdfScene(vec3 p) {
-    float sphere = sdfSphereWithPosition(p);
+    float sphere = sdfSphereWithOffset(p);
     float cube = sdfCubeWithOffset(p);
     return smoothMin(sphere, cube, 0.3); // k=0.3 controls smoothness
 }
 
 // Check which shape is being hit (returns 1 for sphere, 2 for cube, 0 for none)
 int getHitShape(vec3 p) {
-    float sphere = sdfSphereWithPosition(p);
+    float sphere = sdfSphereWithOffset(p);
     float cube = sdfCubeWithOffset(p);
     
     // Check which shape is closer (with a small threshold)
@@ -103,9 +104,9 @@ void main() {
     vec2 uv = (gl_FragCoord.xy / u_resolution.xy) * 2.0 - 1.0;
     uv.x *= u_resolution.x / u_resolution.y;
 
-    // Mouse-controlled camera rotation with natural (non-inverted) controls
-    float horizontalAngle = -(u_mouse.x / u_resolution.x) * 2.0 * 3.14159; // Map mouse X to full rotation (negative for natural control)
-    float verticalAngle = ((1.0 - u_mouse.y / u_resolution.y) - 0.5) * 3.14159 * 0.5; // Map mouse Y to limited tilt (inverted for natural control)
+    // Mouse-controlled camera rotation
+    float horizontalAngle = (u_mouse.x / u_resolution.x) * 2.0 * 3.14159; // Map mouse X to full rotation
+    float verticalAngle = (u_mouse.y / u_resolution.y) * 3.14159 * 0.5;   // Map mouse Y to limited tilt
     
     // Use camera position from uniform
     vec3 ro = u_cameraPos;
@@ -150,9 +151,9 @@ void main() {
         } else {
             // Normal color based on shape
             if (hitShape == 1) {
-                baseColor = vec3(0.8, 0.2, 0.2);
+                baseColor = vec3(0.8, 0.2, 0.2); // Red for sphere
             } else {
-                baseColor = vec3(0.8, 0.2, 0.2); 
+                baseColor = vec3(0.2, 0.8, 0.2); // Green for cube
             }
         }
         

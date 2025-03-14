@@ -68,7 +68,7 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
                 g_renderer->setMouseDragStart(static_cast<float>(xpos), static_cast<float>(ypos));
             } else if (action == GLFW_RELEASE) {
                 g_renderer->setMouseButtonState(false);
-                // No need to call storeDragOffset() as we're updating sphere position directly
+                g_renderer->storeDragOffset();
             }
         }
     }
@@ -188,16 +188,16 @@ int main() {
             // Strafe left/right (perpendicular to view direction)
             if (keyState.left) {
                 g_renderer->moveCamera(
-                    cos(horizontalAngle) * cameraSpeed,
+                    -cos(horizontalAngle) * cameraSpeed,
                     0.0f,
-                    -sin(horizontalAngle) * cameraSpeed
+                    sin(horizontalAngle) * cameraSpeed
                 );
             }
             if (keyState.right) {
                 g_renderer->moveCamera(
-                    -cos(horizontalAngle) * cameraSpeed,
+                    cos(horizontalAngle) * cameraSpeed,
                     0.0f,
-                    sin(horizontalAngle) * cameraSpeed
+                    -sin(horizontalAngle) * cameraSpeed
                 );
             }
             

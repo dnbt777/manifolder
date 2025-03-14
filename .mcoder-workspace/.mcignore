@@ -1,0 +1,6 @@
+__pycache__
+.git/*
+
+sdf_renderer
+README.md
+.gitignore

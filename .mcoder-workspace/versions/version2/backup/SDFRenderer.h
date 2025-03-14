@@ -64,7 +64,4 @@ private:
     // Shape-specific dragging
     bool draggingShape;
     int selectedShape; // 0=none, 1=sphere, 2=cube
-    
-    // World position of the sphere
-    float sphereX, sphereY, sphereZ;
 };
