@@ -7,12 +7,11 @@ float cameraY = 0.0f;
 float cameraZ = 2.0f;
 float cameraSpeed = 0.1f;
 
-// Vertex Shader: Passes 2D positions to fragment shader
 const char* vertexShaderSource = R"(
 #version 330 core
 layout(location = 0) in vec2 aPos;
 void main() {
-    gl_Position = vec4(aPos, 0.0, 1.0); // Simple 2D quad
+    gl_Position = vec4(aPos, 0.0, 1.0); // the screen quad 
 }
 )";
 
@@ -20,11 +19,20 @@ void main() {
 const char* fragmentShaderSource = R"(
 #version 330 core
 out vec4 FragColor;
-uniform vec2 u_resolution; // Window size (e.g., 800x600)
-uniform float u_time;      // Time for camera rotation
-uniform vec2 u_mouse;      // Mouse position in screen coordinates
-uniform vec3 u_cameraPos;  // Camera position in 3D space
-uniform vec3 u_spherePosition; // World position of the sphere
+uniform vec2 u_resolution; 
+uniform float u_time;      
+uniform vec2 u_mouse;      
+uniform vec3 u_cameraPos;  
+uniform float u_isDragging;
+
+// Define maximum number of objects
+#define MAX_OBJECTS 50
+
+// Object data arrays
+uniform int u_objectCount;
+uniform int u_objectTypes[MAX_OBJECTS];        // 0 = sphere, 1 = cube
+uniform vec3 u_objectPositions[MAX_OBJECTS];   // Object positions
+uniform int u_objectSelected[MAX_OBJECTS];     // 1 if selected, 0 if not
 
 // SDF for a sphere: distance to a sphere of radius 0.5
 float sdfSphere(vec3 p) {
@@ -43,35 +51,120 @@ float smoothMin(float a, float b, float k) {
     return min(a, b) - h * h * k * 0.25;
 }
 
-uniform float u_isDragging; // Whether mouse is being dragged
-
-// Shape-specific SDFs with world position
-float sdfSphereWithPosition(vec3 p) {
-    // Move sphere based on its world position
-    return sdfSphere(p - u_spherePosition);
-}
-
-float sdfCubeWithOffset(vec3 p) {
-    // Cube stays at origin
-    return sdfCube(p);
-}
-
-// Combined SDF: merges sphere and cube
-float sdfScene(vec3 p) {
-    float sphere = sdfSphereWithPosition(p);
-    float cube = sdfCubeWithOffset(p);
-    return smoothMin(sphere, cube, 0.3); // k=0.3 controls smoothness
-}
-
-// Check which shape is being hit (returns 1 for sphere, 2 for cube, 0 for none)
-int getHitShape(vec3 p) {
-    float sphere = sdfSphereWithPosition(p);
-    float cube = sdfCubeWithOffset(p);
+// Calculate the blend weight for each object based on proximity
+vec2 smoothMinWeight(float a, float b, float k) {
+    float h = max(k - abs(a - b), 0.0) / k;
+    float m = h * h * 0.5; // Blend factor
     
-    // Check which shape is closer (with a small threshold)
-    if (sphere < 0.01 && sphere < cube) return 1; // Sphere
-    if (cube < 0.01 && cube <= sphere) return 2;  // Cube
-    return 0; // No hit
+    // Calculate individual weights
+    float weight_a = (a < b) ? (1.0 - m) : m;
+    float weight_b = (a < b) ? m : (1.0 - m);
+    
+    return vec2(weight_a, weight_b);
+}
+
+// Object-specific SDFs with world position
+float sdfObject(vec3 p, int objIndex) {
+    // Get object data
+    int type = u_objectTypes[objIndex];
+    vec3 position = u_objectPositions[objIndex];
+    
+    // Calculate distance based on object type
+    if (type == 0) {
+        // Sphere
+        return sdfSphere(p - position);
+    } else if (type == 1) {
+        // Cube
+        return sdfCube(p - position);
+    }
+    
+    return 1000.0; // Default large distance for unknown types
+}
+
+// Structure to hold both distance and color information
+struct SDFResult {
+    float distance;
+    vec3 color;
+};
+
+// Get color for object based on type and selection state
+vec3 getObjectColor(int objIndex) {
+    int objType = u_objectTypes[objIndex];
+    bool isSelected = u_objectSelected[objIndex] == 1;
+    
+    if (isSelected) {
+        return vec3(0.2, 0.4, 0.9); // Selected objects are blue
+    } else if (objType == 0) {
+        return vec3(0.8, 0.2, 0.2); // Sphere - red
+    } else if (objType == 1) {
+        return vec3(0.8, 0.4, 0.0); // Cube - orange
+    }
+    return vec3(1.0); // Default white
+}
+
+// Combined SDF: finds minimum distance to any object in the scene and calculates blended color
+SDFResult sdfScene(vec3 p) {
+    float minDist = 1000.0;
+    vec3 blendedColor = vec3(0.0);
+    float totalWeight = 0.0;
+    
+    // First pass: calculate distances for each object
+    float objectDists[MAX_OBJECTS];
+    for (int i = 0; i < u_objectCount && i < MAX_OBJECTS; i++) {
+        objectDists[i] = sdfObject(p, i);
+    }
+    
+    // Second pass: blend distances and calculate color weights
+    minDist = 1000.0;
+    for (int i = 0; i < u_objectCount && i < MAX_OBJECTS; i++) {
+        float dist = objectDists[i];
+        
+        // For each object pair, calculate smooth blending
+        for (int j = 0; j < i; j++) {
+            float smoothed = smoothMin(dist, objectDists[j], 0.3);
+            
+            // If this blend creates a new minimum, update distances
+            if (smoothed < minDist) {
+                // Calculate blend weights
+                vec2 weights = smoothMinWeight(dist, objectDists[j], 0.3);
+                
+                // Get colors for both objects including selection state
+                vec3 color_i = getObjectColor(i);
+                vec3 color_j = getObjectColor(j);
+                
+                // Blend colors based on weights
+                blendedColor = color_i * weights.x + color_j * weights.y;
+                minDist = smoothed;
+            }
+        }
+        
+        // Also check individual object distances
+        if (dist < minDist) {
+            minDist = dist;
+            
+            // Set color based on object (including selection state)
+            blendedColor = getObjectColor(i);
+        }
+    }
+    
+    // Return both distance and blended color
+    return SDFResult(minDist, blendedColor);
+}
+
+// Find the closest object hit (returns index, or -1 if none)
+int getHitObjectIndex(vec3 p) {
+    float minDist = 1000.0;
+    int closestIndex = -1;
+    
+    for (int i = 0; i < u_objectCount && i < MAX_OBJECTS; i++) {
+        float dist = sdfObject(p, i);
+        if (dist < minDist && dist < 0.01) {
+            minDist = dist;
+            closestIndex = i;
+        }
+    }
+    
+    return closestIndex;
 }
 
 // Raymarching: traces a ray to find the scene
@@ -79,7 +172,7 @@ float raymarch(vec3 ro, vec3 rd) {
     float t = 0.0; // Distance along ray
     for (int i = 0; i < 64; i++) {
         vec3 p = ro + rd * t; // Current position
-        float d = sdfScene(p); // Distance to scene
+        float d = sdfScene(p).distance; // Distance to scene
         if (d < 0.001) return t; // Hit (close enough)
         t += d; // Step forward
         if (t > 20.0) return -1.0; // Too far, miss
@@ -91,9 +184,9 @@ float raymarch(vec3 ro, vec3 rd) {
 vec3 getNormal(vec3 p) {
     float eps = 0.001; // Small offset
     vec3 n = vec3(
-        sdfScene(p + vec3(eps, 0.0, 0.0)) - sdfScene(p - vec3(eps, 0.0, 0.0)),
-        sdfScene(p + vec3(0.0, eps, 0.0)) - sdfScene(p - vec3(0.0, eps, 0.0)),
-        sdfScene(p + vec3(0.0, 0.0, eps)) - sdfScene(p - vec3(0.0, 0.0, eps))
+        sdfScene(p + vec3(eps, 0.0, 0.0)).distance - sdfScene(p - vec3(eps, 0.0, 0.0)).distance,
+        sdfScene(p + vec3(0.0, eps, 0.0)).distance - sdfScene(p - vec3(0.0, eps, 0.0)).distance,
+        sdfScene(p + vec3(0.0, 0.0, eps)).distance - sdfScene(p - vec3(0.0, 0.0, eps)).distance
     );
     return normalize(n); // Unit vector
 }
@@ -129,37 +222,36 @@ void main() {
 
     // Raymarch the scene
     float t = raymarch(ro, rd);
-    if (t > 0.0) { // Hit the merged shape
+    if (t > 0.0) { // Hit something
         vec3 p = ro + rd * t; // Hit point
         vec3 normal = getNormal(p); // Surface normal
         
-        // Check which shape we hit
-        int hitShape = getHitShape(p);
-
+        // Get the blended color from our scene evaluation
+        SDFResult sceneResult = sdfScene(p);
+        vec3 baseColor = sceneResult.color;
+        
+        // Find which object was hit (for cursor hover highlighting)
+        int hitObjectIndex = getHitObjectIndex(p);
+        
+        // Only override with blue if it's the center ray (cursor hovering) but not already selected
+        if (hitObjectIndex >= 0 && hitObjectIndex < MAX_OBJECTS) {
+            bool isSelected = u_objectSelected[hitObjectIndex] == 1;
+            if (centerRay && !isSelected) {
+                // Object under cursor (hovered) is highlighted in blue
+                baseColor = vec3(0.2, 0.4, 0.9);
+            }
+        }
+        
         // Lighting: fixed light at (2, 2, 2)
         vec3 lightPos = vec3(2.0, 2.0, 2.0);
         vec3 lightDir = normalize(lightPos - p);
         float diffuse = max(dot(normal, lightDir), 0.0); // Diffuse lighting
         vec3 ambient = vec3(0.1); // Ambient light
         
-        // Color selection based on cursor position
-        vec3 baseColor;
-        if (centerRay) {
-            // If cursor is over a shape, make it blue
-            baseColor = vec3(0.2, 0.4, 0.9); // Blue for hover state
-        } else {
-            // Normal color based on shape
-            if (hitShape == 1) {
-                baseColor = vec3(0.8, 0.2, 0.2);
-            } else {
-                baseColor = vec3(0.8, 0.2, 0.2); 
-            }
-        }
-        
         vec3 color = baseColor * diffuse + ambient;
         FragColor = vec4(color, 1.0); // Output color
     } else {
-                FragColor = vec4(0.0, 0.0, 0.2, 1.0); // Dark blue background
+        FragColor = vec4(0.0, 0.0, 0.2, 1.0); // Dark blue background
         
         // Draw crosshair if no object was hit
         if (length(uv) < 0.02 && (abs(uv.x) < 0.005 || abs(uv.y) < 0.005)) {

@@ -3,6 +3,7 @@
 #include <GLFW/glfw3.h>
 #include <iostream>
 #include "SDFRenderer.h"
+#include "CoordSystem.h"
 
 // Global renderer pointer for callbacks
 SDFRenderer* g_renderer = nullptr;
@@ -15,6 +16,7 @@ struct {
     bool right = false;     // D
     bool up = false;        // Space
     bool down = false;      // Shift
+    bool shift = false;     // Shift key for selection mode
 } keyState;
 
 // Mouse callback function
@@ -52,6 +54,7 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
             case GLFW_KEY_LEFT_SHIFT:
             case GLFW_KEY_RIGHT_SHIFT:
                 keyState.down = isPressed;
+                // No longer need to track shift key for multi-selection
                 break;
         }
     }
@@ -63,12 +66,8 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
         if (button == GLFW_MOUSE_BUTTON_LEFT) {
             if (action == GLFW_PRESS) {
                 g_renderer->setMouseButtonState(true);
-                double xpos, ypos;
-                glfwGetCursorPos(window, &xpos, &ypos);
-                g_renderer->setMouseDragStart(static_cast<float>(xpos), static_cast<float>(ypos));
             } else if (action == GLFW_RELEASE) {
                 g_renderer->setMouseButtonState(false);
-                // No need to call storeDragOffset() as we're updating sphere position directly
             }
         }
     }

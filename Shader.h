@@ -15,6 +15,7 @@ public:
     bool compile(const char* vertexSource, const char* fragmentSource);
     
     // Utility uniform functions
+    void setInt(const std::string &name, int value);
     void setFloat(const std::string &name, float value);
     void setVec2(const std::string &name, float x, float y);
     void setVec3(const std::string &name, float x, float y, float z);
